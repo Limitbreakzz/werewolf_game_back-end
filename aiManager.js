@@ -80,14 +80,60 @@ export function scheduleBotNightActions(room, engine) {
       addBotTimer(room, () => {
         if (room.phase !== 'night' || room.nightStep !== 'doctor' || !bot.alive) return;
         const lastProtected = room.doctorLastProtected[bot.id];
-        let candidates = alivePlayers.filter((p) => p.id !== lastProtected);
-        if (candidates.length === 0) candidates = alivePlayers;
-        let target = candidates.find((p) => p.id === room.aiMemory.claimedSeerId);
-        if (!target) {
-          target = Math.random() < 0.25 && candidates.some((p) => p.id === bot.id) ? bot : pickRandom(candidates);
-        }
+        let candidates = alivePlayers.filter((p) => p.id !== bot.id && p.id !== lastProtected);
+        if (candidates.length === 0) candidates = alivePlayers.filter((p) => p.id !== bot.id);
+        if (candidates.length === 0) return;
+        const target = candidates.find((p) => p.id === room.aiMemory.claimedSeerId) || pickRandom(candidates);
         engine.handleNightAction(room.code, bot.id, { type: 'doctor_protect', targetId: target.id });
       }, randInt(1400, 2800));
+    }
+  } else if (['cupid', 'hoodlum', 'mentalist'].includes(step)) {
+    const actors = aliveBots.filter((p) => p.role === step);
+    const typeMap = { cupid: 'cupid_pair', hoodlum: 'hoodlum_pick', mentalist: 'mentalist_inspect' };
+    for (const bot of actors) {
+      addBotTimer(room, () => {
+        if (room.phase !== 'night' || room.nightStep !== step || !bot.alive) return;
+        const pool = alivePlayers.filter((p) => p.id !== bot.id).sort(() => Math.random() - 0.5);
+        if (pool.length < 2) return;
+        engine.handleNightAction(room.code, bot.id, { type: typeMap[step], targetIds: [pool[0].id, pool[1].id] });
+      }, randInt(1400, 2600));
+    }
+  } else if (
+    ['doppelganger', 'vampire', 'cult_leader', 'mystic_seer', 'aura_seer', 'pi', 'priest', 'revealer', 'huntress', 'spellcaster', 'old_hag'].includes(step)
+  ) {
+    const actors = aliveBots.filter((p) => p.role === step);
+    const typeMap = {
+      doppelganger: 'doppelganger_pick',
+      vampire: 'vampire_bite',
+      cult_leader: 'cult_recruit',
+      mystic_seer: 'mystic_inspect',
+      aura_seer: 'aura_inspect',
+      pi: 'pi_inspect',
+      priest: 'priest_bless',
+      revealer: 'revealer_action',
+      huntress: 'huntress_action',
+      spellcaster: 'spellcaster_silence',
+      old_hag: 'old_hag_exile',
+    };
+    for (const bot of actors) {
+      addBotTimer(room, () => {
+        if (room.phase !== 'night' || room.nightStep !== step || !bot.alive) return;
+        const pool = alivePlayers.filter((p) => p.id !== bot.id && (step !== 'vampire' || p.role !== 'vampire'));
+        if (pool.length === 0) return;
+        if (['revealer', 'huntress', 'pi', 'priest'].includes(step) && Math.random() < 0.35) {
+          engine.handleNightAction(room.code, bot.id, { type: typeMap[step], skip: true });
+        } else {
+          engine.handleNightAction(room.code, bot.id, { type: typeMap[step], targetId: pickRandom(pool).id });
+        }
+      }, randInt(1400, 2800));
+    }
+  } else if (step === 'troublemaker') {
+    const actors = aliveBots.filter((p) => p.role === 'troublemaker');
+    for (const bot of actors) {
+      addBotTimer(room, () => {
+        if (room.phase !== 'night' || room.nightStep !== 'troublemaker' || !bot.alive) return;
+        engine.handleNightAction(room.code, bot.id, { type: 'troublemaker_action', activate: room.dayNumber >= 2 && Math.random() < 0.5 });
+      }, randInt(1400, 2600));
     }
   } else if (step === 'witch') {
     const witchBots = aliveBots.filter((p) => p.role === 'witch');
@@ -250,7 +296,11 @@ export function scheduleBotVerdict(room, engine) {
     addBotTimer(room, () => {
       if ((room.phase !== 'day_defense' && room.phase !== 'day_verdict') || !bot.alive) return;
       let choice = 'execute';
-      if (isPackWolf(bot.role) && isPackWolf(accused.role)) {
+      if (bot.role === 'pacifist') {
+        choice = 'spare';
+      } else if (bot.role === 'villager_idiot') {
+        choice = 'execute';
+      } else if (isPackWolf(bot.role) && isPackWolf(accused.role)) {
         // Pack wolves try to spare their wolf teammate!
         choice = 'spare';
       } else if (room.seerResults?.[bot.id]?.[accused.id] === 'village') {
