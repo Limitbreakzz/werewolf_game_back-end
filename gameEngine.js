@@ -6,6 +6,8 @@ import {
   scheduleBotNightActions,
   scheduleBotDayChat,
   scheduleBotVotes,
+  scheduleBotDefense,
+  scheduleBotVerdict,
   scheduleBotHunterShot,
 } from './aiManager.js';
 
@@ -80,6 +82,8 @@ export class GameEngine {
         nightStepSeconds: 20,
         discussSeconds: 90,
         voteSeconds: 35,
+        defenseSeconds: 30,
+        verdictSeconds: 20,
         hunterSeconds: 20,
         autoRoles: true,
         roleConfig: getDefaultRoleConfig(6),
@@ -91,6 +95,8 @@ export class GameEngine {
       witchState: {},
       wolfDoubleKillNextNight: false,
       dayVotes: {},
+      accusedId: null,
+      verdictVotes: {}, // voterId -> 'execute' | 'spare'
       dayReadySet: new Set(),
       pendingHunterQueue: [],
       hunterNextPhase: null,
@@ -315,6 +321,8 @@ export class GameEngine {
     room.witchState = {};
     room.wolfDoubleKillNextNight = false;
     room.dayVotes = {};
+    room.accusedId = null;
+    room.verdictVotes = {};
     room.dayReadySet = new Set();
     room.pendingHunterQueue = [];
     room.hunterNextPhase = null;
@@ -369,6 +377,11 @@ export class GameEngine {
       return { ok: true };
     }
 
+    if (action === 'end_defense_now' && room.phase === 'day_defense') {
+      this._enterPhase(room, 'day_verdict', isManualMod ? null : room.settings.verdictSeconds);
+      return { ok: true };
+    }
+
     if (!isManualMod) return { ok: false };
 
     if (action === 'next_step') {
@@ -387,6 +400,10 @@ export class GameEngine {
         this._enterPhase(room, 'day_vote', null);
       } else if (room.phase === 'day_vote') {
         this._resolveDayVote(room);
+      } else if (room.phase === 'day_defense') {
+        this._enterPhase(room, 'day_verdict', null);
+      } else if (room.phase === 'day_verdict') {
+        this._resolveVerdict(room);
       } else if (room.phase === 'hunter_revenge') {
         this._onPhaseTimeout(room);
       }
@@ -662,6 +679,42 @@ export class GameEngine {
     return { ok: true };
   }
 
+  handleEndDefense(roomCode, playerId) {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.phase !== 'day_defense') return { ok: false };
+    if (playerId !== room.accusedId && playerId !== room.hostId) {
+      return { ok: false, error: 'เฉพาะผู้ถูกเสนอชื่อหรือหัวหน้าห้องเท่านั้นที่จบช่วงแก้ตัวได้' };
+    }
+    const isManualMod = room.settings.controlMode === 'manual_mod';
+    this._enterPhase(room, 'day_verdict', isManualMod ? null : room.settings.verdictSeconds);
+    return { ok: true };
+  }
+
+  handleVerdictVote(roomCode, playerId, choice) {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.phase !== 'day_verdict') return { ok: false };
+    if (!['execute', 'spare'].includes(choice)) return { ok: false };
+    const voter = room.players.find((p) => p.id === playerId && p.alive && !p.isModerator);
+    if (!voter) return { ok: false, error: 'ผู้เสียชีวิตไม่สามารถโหวตได้' };
+    if (voter.id === room.accusedId) {
+      return { ok: false, error: 'ผู้ถูกเสนอชื่อไม่สามารถโหวตตัดสินตัวเองได้' };
+    }
+
+    room.verdictVotes[voter.id] = choice;
+
+    const eligibleVoters = room.players.filter(
+      (p) => p.alive && !p.isModerator && p.id !== room.accusedId && (p.isBot || p.connected)
+    ).length;
+
+    if (room.settings.controlMode !== 'manual_mod' && Object.keys(room.verdictVotes).length >= eligibleVoters) {
+      this._resolveVerdict(room);
+      return { ok: true };
+    }
+
+    this.broadcastRoomState(room);
+    return { ok: true };
+  }
+
   handleHunterShoot(roomCode, playerId, targetId) {
     const room = this.rooms.get(roomCode);
     if (!room || room.phase !== 'hunter_revenge') return { ok: false };
@@ -919,8 +972,15 @@ export class GameEngine {
       scheduleBotDayChat(room, this);
     } else if (phase === 'day_vote') {
       room.dayVotes = {};
+      room.accusedId = null;
+      room.verdictVotes = {};
       room.lastVoteSummary = null;
       scheduleBotVotes(room, this);
+    } else if (phase === 'day_defense') {
+      scheduleBotDefense(room, this);
+    } else if (phase === 'day_verdict') {
+      room.verdictVotes = {};
+      scheduleBotVerdict(room, this);
     } else if (phase === 'night') {
       scheduleBotNightActions(room, this);
     } else if (phase === 'hunter_revenge') {
@@ -958,6 +1018,12 @@ export class GameEngine {
         break;
       case 'day_vote':
         this._resolveDayVote(room);
+        break;
+      case 'day_defense':
+        this._enterPhase(room, 'day_verdict', isManualMod ? null : room.settings.verdictSeconds);
+        break;
+      case 'day_verdict':
+        this._resolveVerdict(room);
         break;
       case 'hunter_revenge': {
         const hunterId = room.pendingHunterQueue.shift();
@@ -1041,7 +1107,7 @@ export class GameEngine {
     }
 
     const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
-    let eliminated = null;
+    let accused = null;
     let reason = 'no_votes';
 
     if (entries.length > 0) {
@@ -1050,44 +1116,87 @@ export class GameEngine {
       if (tied || topCount <= skipVotes) {
         reason = tied ? 'tie' : 'skip';
       } else {
-        eliminated = room.players.find((p) => p.id === topId && p.alive && !p.isModerator);
-        if (eliminated) {
-          eliminated.alive = false;
-          eliminated.deathCause = 'vote';
-          reason = 'eliminated';
-        }
+        accused = room.players.find((p) => p.id === topId && p.alive && !p.isModerator);
+        if (accused) reason = 'accused';
       }
     } else if (skipVotes > 0) {
       reason = 'skip';
     }
 
+    if (!accused) {
+      room.lastVoteSummary = {
+        reason,
+        eliminatedId: null,
+        eliminatedName: null,
+        eliminatedRole: null,
+        tally,
+        skipVotes,
+      };
+      if (reason === 'tie') {
+        this._addLog(room, 'คะแนนโหวตเสมอกัน วันนี้ไม่มีใครถูกเสนอชื่อ');
+      } else {
+        this._addLog(room, 'หมู่บ้านงดออกเสียง วันนี้ไม่มีใครถูกเสนอชื่อ');
+      }
+      this._startNight(room);
+      return;
+    }
+
+    // Enter Defense Phase so the accused can plead their case before final verdict!
+    room.accusedId = accused.id;
+    room.verdictVotes = {};
+    this._addLog(room, `${accused.name} ถูกโหวตเสนอชื่อสูงสุด! เข้าสู่ช่วงแก้ตัว`);
+    const isManualMod = room.settings.controlMode === 'manual_mod';
+    this._enterPhase(room, 'day_defense', isManualMod ? null : room.settings.defenseSeconds);
+  }
+
+  _resolveVerdict(room) {
+    const accused = room.players.find((p) => p.id === room.accusedId && p.alive && !p.isModerator);
+    let executeVotes = 0;
+    let spareVotes = 0;
+
+    for (const [voterId, choice] of Object.entries(room.verdictVotes)) {
+      const voter = room.players.find((p) => p.id === voterId);
+      const weight = voter && voter.role === 'mayor' ? 2 : 1;
+      if (choice === 'execute') executeVotes += weight;
+      else if (choice === 'spare') spareVotes += weight;
+    }
+
+    const shouldExecute = Boolean(accused) && executeVotes > spareVotes;
+    let eliminated = null;
+
+    if (shouldExecute) {
+      accused.alive = false;
+      accused.deathCause = 'vote';
+      eliminated = accused;
+    }
+
     room.lastVoteSummary = {
-      reason,
+      reason: eliminated ? 'eliminated' : 'spared',
       eliminatedId: eliminated ? eliminated.id : null,
       eliminatedName: eliminated ? eliminated.name : null,
       eliminatedRole: eliminated ? eliminated.role : null,
-      tally,
-      skipVotes,
+      sparedName: !eliminated && accused ? accused.name : null,
+      executeVotes,
+      spareVotes,
     };
 
+    room.accusedId = null;
+    room.verdictVotes = {};
+
     if (eliminated) {
-      this._addLog(room, `มติหมู่บ้านโหวต ${eliminated.name} ออกจากหมู่บ้าน`);
-    } else if (reason === 'tie') {
-      this._addLog(room, `คะแนนโหวตเสมอกัน วันนี้ไม่มีใครถูกโหวตออก`);
-    } else {
-      this._addLog(room, `หมู่บ้านงดออกเสียง วันนี้ไม่มีใครถูกโหวตออก`);
+      this._addLog(room, `มติตัดสิน (${executeVotes} ประหาร / ${spareVotes} ปล่อยตัว): ${eliminated.name} ถูกประหาร!`);
+    } else if (accused) {
+      this._addLog(room, `มติตัดสิน (${executeVotes} ประหาร / ${spareVotes} ปล่อยตัว): ยกเลิกโหวต! ${accused.name} รอดชีวิต`);
     }
 
-    // Official Ultimate Werewolf: Tanner wins alone immediately if eliminated by Day Vote!
     if (eliminated && eliminated.role === 'tanner') {
       room.winner = 'tanner';
       room.winnerPlayerName = eliminated.name;
-      this._addLog(room, `คนคลั่ง ${eliminated.name} ถูกโหวตออกและชนะเกมคนเดียวทันที!`);
+      this._addLog(room, `คนคลั่ง ${eliminated.name} ถูกโหวตประหารและชนะเกมคนเดียวทันที!`);
       this._enterPhase(room, 'game_over', null);
       return;
     }
 
-    // Official Ultimate Werewolf: Wolf Cub death triggers Double Kill next night!
     if (eliminated && eliminated.role === 'wolf_cub') {
       room.wolfDoubleKillNextNight = true;
       this._addLog(room, 'ลูกมนุษย์หมาป่าเสียชีวิต! คืนถัดไปฝูงมนุษย์หมาป่าจะล่าได้ 2 คน');
@@ -1284,6 +1393,8 @@ export class GameEngine {
       players,
       settings: room.settings,
       dayVotes: room.phase === 'day_vote' ? room.dayVotes : {},
+      accusedId: room.phase === 'day_defense' || room.phase === 'day_verdict' ? room.accusedId : null,
+      verdictVotes: room.phase === 'day_verdict' ? room.verdictVotes : {},
       dayReadyIds: Array.from(room.dayReadySet),
       activeHunterId: room.phase === 'hunter_revenge' ? room.pendingHunterQueue[0] || null : null,
       lastDawnSummary: room.lastDawnSummary,

@@ -229,6 +229,50 @@ export function scheduleBotVotes(room, engine) {
   });
 }
 
+export function scheduleBotDefense(room, engine) {
+  const accused = room.players.find((p) => p.id === room.accusedId);
+  if (!accused || !accused.isBot) return;
+
+  addBotTimer(room, () => {
+    if (room.phase !== 'day_defense' || room.accusedId !== accused.id) return;
+    engine.handleChat(room.code, accused.id, 'village', pickRandom(CHAT_LINES.defendSelf));
+  }, randInt(1600, 3200));
+
+  // If the accused is a bot and not manual_mod, auto-finish defense after ~6s so solo players don't wait 30s
+  if (room.settings.controlMode !== 'manual_mod') {
+    addBotTimer(room, () => {
+      if (room.phase === 'day_defense' && room.accusedId === accused.id) {
+        engine.handleEndDefense(room.code, accused.id);
+      }
+    }, 6000);
+  }
+}
+
+export function scheduleBotVerdict(room, engine) {
+  const aliveBots = room.players.filter(
+    (p) => p.alive && !p.isModerator && p.isBot && p.id !== room.accusedId
+  );
+  const accused = room.players.find((p) => p.id === room.accusedId);
+  if (!accused) return;
+
+  aliveBots.forEach((bot, idx) => {
+    addBotTimer(room, () => {
+      if (room.phase !== 'day_verdict' || !bot.alive) return;
+      let choice = 'execute';
+      if (isPackWolf(bot.role) && isPackWolf(accused.role)) {
+        // Pack wolves try to spare their wolf teammate!
+        choice = 'spare';
+      } else if (room.seerResults?.[bot.id]?.[accused.id] === 'village') {
+        // Seer knows accused is innocent -> spare!
+        choice = 'spare';
+      } else if (Math.random() < 0.3) {
+        choice = 'spare';
+      }
+      engine.handleVerdictVote(room.code, bot.id, choice);
+    }, randInt(1200, 4200) + idx * 350);
+  });
+}
+
 export function scheduleBotHunterShot(room, engine) {
   const hunterId = room.pendingHunterQueue[0];
   if (!hunterId) return;

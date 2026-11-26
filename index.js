@@ -155,6 +155,20 @@ io.on('connection', (socket) => {
     reply(cb, res);
   });
 
+  socket.on('end_defense', (_, cb) => {
+    const ctx = getCtx();
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleEndDefense(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
+  });
+
+  socket.on('verdict_vote', (payload, cb) => {
+    const ctx = getCtx();
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleVerdictVote(ctx.roomCode, ctx.playerId, payload?.choice);
+    reply(cb, res);
+  });
+
   socket.on('hunter_shoot', (payload, cb) => {
     const ctx = getCtx();
     if (!ctx) return reply(cb, { ok: false });
