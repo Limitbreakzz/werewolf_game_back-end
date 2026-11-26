@@ -339,6 +339,12 @@ export class GameEngine {
       room.settings.autoRoles ? null : room.settings.roleConfig
     );
 
+    const activeRoleCounts = {};
+    for (const rId of deck) {
+      activeRoleCounts[rId] = (activeRoleCounts[rId] || 0) + 1;
+    }
+    room.activeRoleCounts = activeRoleCounts;
+
     room.dayNumber = 0;
     room.nightStep = null;
     room.winner = null;
@@ -1417,6 +1423,7 @@ export class GameEngine {
       dayNumber: room.dayNumber,
       players,
       settings: room.settings,
+      activeRoleCounts: room.activeRoleCounts || room.settings.roleConfig || {},
       dayVotes: room.phase === 'day_vote' ? room.dayVotes : {},
       accusedId: room.phase === 'day_defense' || room.phase === 'day_verdict' ? room.accusedId : null,
       verdictVotes: room.phase === 'day_defense' || room.phase === 'day_verdict' ? room.verdictVotes : {},
