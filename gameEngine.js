@@ -815,7 +815,7 @@ export class GameEngine {
       if (p.isBot || !p.socketId) continue;
       const canSee =
         channel === 'village' ||
-        (channel === 'wolf' && (isPackWolf(p.role) || !p.alive || p.isModerator || room.phase === 'game_over')) ||
+        (channel === 'wolf' && (isPackWolf(p.role) || p.isModerator || room.phase === 'game_over')) ||
         (channel === 'ghost' && (!p.alive || p.isModerator || room.phase === 'game_over'));
       if (canSee) {
         this.io.to(p.socketId).emit('chat_message', { channel, message: msg });
@@ -1330,8 +1330,7 @@ export class GameEngine {
         isGameOver ||
         isViewerMod ||
         p.id === viewerId ||
-        ((isViewerPackWolf || isViewerMinion) && isPackWolf(p.role)) ||
-        (isViewerDead && room.phase !== 'lobby');
+        ((isViewerPackWolf || isViewerMinion) && isPackWolf(p.role));
 
       return {
         id: p.id,
@@ -1387,7 +1386,7 @@ export class GameEngine {
         viewer && viewer.role === 'doctor' ? room.doctorLastProtected[viewer.id] || null : null,
       doctorChoiceTonight:
         viewer && viewer.role === 'doctor' ? room.night.doctorChoices[viewer.id] || null : null,
-      wolfVotes: isViewerPackWolf || isViewerMod || isViewerDead || isGameOver ? room.night.wolfVotes : {},
+      wolfVotes: isViewerPackWolf || isViewerMod || isGameOver ? room.night.wolfVotes : {},
       witchState: viewer && viewer.role === 'witch' ? room.witchState[viewer.id] || null : null,
       witchDoneTonight:
         viewer && viewer.role === 'witch' ? Boolean(room.night.witchDone[viewer.id]) : false,
@@ -1403,7 +1402,7 @@ export class GameEngine {
 
     const chat = {
       village: room.chat.village,
-      wolf: isViewerPackWolf || isViewerMod || isViewerDead || isGameOver ? room.chat.wolf : [],
+      wolf: isViewerPackWolf || isViewerMod || isGameOver ? room.chat.wolf : [],
       ghost: isViewerDead || isViewerMod || isGameOver ? room.chat.ghost : [],
     };
 
