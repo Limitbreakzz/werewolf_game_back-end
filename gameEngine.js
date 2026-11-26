@@ -579,8 +579,8 @@ export class GameEngine {
 
     room.dayVotes[voter.id] = targetId;
 
-    const aliveCount = room.players.filter((p) => p.alive && !p.isModerator).length;
-    if (room.settings.controlMode !== 'manual_mod' && Object.keys(room.dayVotes).length >= aliveCount) {
+    const activeVoters = room.players.filter((p) => p.alive && !p.isModerator && (p.isBot || p.connected)).length;
+    if (room.settings.controlMode !== 'manual_mod' && Object.keys(room.dayVotes).length >= activeVoters) {
       this._resolveDayVote(room);
       return { ok: true };
     }
