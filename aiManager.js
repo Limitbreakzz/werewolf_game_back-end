@@ -237,15 +237,6 @@ export function scheduleBotDefense(room, engine) {
     if (room.phase !== 'day_defense' || room.accusedId !== accused.id) return;
     engine.handleChat(room.code, accused.id, 'village', pickRandom(CHAT_LINES.defendSelf));
   }, randInt(1600, 3200));
-
-  // If the accused is a bot and not manual_mod, auto-finish defense after ~6s so solo players don't wait 30s
-  if (room.settings.controlMode !== 'manual_mod') {
-    addBotTimer(room, () => {
-      if (room.phase === 'day_defense' && room.accusedId === accused.id) {
-        engine.handleEndDefense(room.code, accused.id);
-      }
-    }, 6000);
-  }
 }
 
 export function scheduleBotVerdict(room, engine) {
@@ -257,7 +248,7 @@ export function scheduleBotVerdict(room, engine) {
 
   aliveBots.forEach((bot, idx) => {
     addBotTimer(room, () => {
-      if (room.phase !== 'day_verdict' || !bot.alive) return;
+      if ((room.phase !== 'day_defense' && room.phase !== 'day_verdict') || !bot.alive) return;
       let choice = 'execute';
       if (isPackWolf(bot.role) && isPackWolf(accused.role)) {
         // Pack wolves try to spare their wolf teammate!
@@ -269,7 +260,7 @@ export function scheduleBotVerdict(room, engine) {
         choice = 'spare';
       }
       engine.handleVerdictVote(room.code, bot.id, choice);
-    }, randInt(1200, 4200) + idx * 350);
+    }, randInt(3200, 6200) + idx * 450);
   });
 }
 

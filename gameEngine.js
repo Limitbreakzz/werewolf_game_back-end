@@ -406,7 +406,7 @@ export class GameEngine {
     }
 
     if (action === 'end_defense_now' && room.phase === 'day_defense') {
-      this._enterPhase(room, 'day_verdict', isManualMod ? null : room.settings.verdictSeconds);
+      this._resolveVerdict(room);
       return { ok: true };
     }
 
@@ -428,9 +428,7 @@ export class GameEngine {
         this._enterPhase(room, 'day_vote', null);
       } else if (room.phase === 'day_vote') {
         this._resolveDayVote(room);
-      } else if (room.phase === 'day_defense') {
-        this._enterPhase(room, 'day_verdict', null);
-      } else if (room.phase === 'day_verdict') {
+      } else if (room.phase === 'day_defense' || room.phase === 'day_verdict') {
         this._resolveVerdict(room);
       } else if (room.phase === 'hunter_revenge') {
         this._onPhaseTimeout(room);
@@ -709,18 +707,17 @@ export class GameEngine {
 
   handleEndDefense(roomCode, playerId) {
     const room = this.rooms.get(roomCode);
-    if (!room || room.phase !== 'day_defense') return { ok: false };
-    if (playerId !== room.accusedId && playerId !== room.hostId) {
-      return { ok: false, error: 'เฉพาะผู้ถูกเสนอชื่อหรือหัวหน้าห้องเท่านั้นที่จบช่วงแก้ตัวได้' };
+    if (!room || (room.phase !== 'day_defense' && room.phase !== 'day_verdict')) return { ok: false };
+    if (playerId !== room.hostId) {
+      return { ok: false, error: 'เฉพาะหัวหน้าห้องเท่านั้นที่สรุปผลโหวตก่อนครบทุกคนได้' };
     }
-    const isManualMod = room.settings.controlMode === 'manual_mod';
-    this._enterPhase(room, 'day_verdict', isManualMod ? null : room.settings.verdictSeconds);
+    this._resolveVerdict(room);
     return { ok: true };
   }
 
   handleVerdictVote(roomCode, playerId, choice) {
     const room = this.rooms.get(roomCode);
-    if (!room || room.phase !== 'day_verdict') return { ok: false };
+    if (!room || (room.phase !== 'day_defense' && room.phase !== 'day_verdict')) return { ok: false };
     if (!['execute', 'spare'].includes(choice)) return { ok: false };
     const voter = room.players.find((p) => p.id === playerId && p.alive && !p.isModerator);
     if (!voter) return { ok: false, error: 'ผู้เสียชีวิตไม่สามารถโหวตได้' };
@@ -1005,7 +1002,9 @@ export class GameEngine {
       room.lastVoteSummary = null;
       scheduleBotVotes(room, this);
     } else if (phase === 'day_defense') {
+      room.verdictVotes = {};
       scheduleBotDefense(room, this);
+      scheduleBotVerdict(room, this);
     } else if (phase === 'day_verdict') {
       room.verdictVotes = {};
       scheduleBotVerdict(room, this);
@@ -1169,12 +1168,11 @@ export class GameEngine {
       return;
     }
 
-    // Enter Defense Phase so the accused can plead their case before final verdict!
+    // Enter Defense & Confirmation Phase (no auto-timeout: waits until everyone votes execute or spare!)
     room.accusedId = accused.id;
     room.verdictVotes = {};
-    this._addLog(room, `${accused.name} ถูกโหวตเสนอชื่อสูงสุด! เข้าสู่ช่วงแก้ตัว`);
-    const isManualMod = room.settings.controlMode === 'manual_mod';
-    this._enterPhase(room, 'day_defense', isManualMod ? null : room.settings.defenseSeconds);
+    this._addLog(room, `${accused.name} ถูกโหวตเสนอชื่อสูงสุด! เข้าสู่ช่วงแก้ตัวและรอทุกคนโหวตยืนยัน`);
+    this._enterPhase(room, 'day_defense', null);
   }
 
   _resolveVerdict(room) {
@@ -1422,7 +1420,7 @@ export class GameEngine {
       settings: room.settings,
       dayVotes: room.phase === 'day_vote' ? room.dayVotes : {},
       accusedId: room.phase === 'day_defense' || room.phase === 'day_verdict' ? room.accusedId : null,
-      verdictVotes: room.phase === 'day_verdict' ? room.verdictVotes : {},
+      verdictVotes: room.phase === 'day_defense' || room.phase === 'day_verdict' ? room.verdictVotes : {},
       dayReadyIds: Array.from(room.dayReadySet),
       activeHunterId: room.phase === 'hunter_revenge' ? room.pendingHunterQueue[0] || null : null,
       lastDawnSummary: room.lastDawnSummary,
