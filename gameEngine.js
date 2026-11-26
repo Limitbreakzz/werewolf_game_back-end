@@ -9,7 +9,10 @@ import {
   scheduleBotHunterShot,
 } from './aiManager.js';
 
-const AVATAR_POOL = ['🦊', '🦉', '🐱', '🦅', '🐰', '🐻', '🐼', '🦁', '🦋', '🐉', '🐨', '🐯', '🦄', '🐧', '🦈', '🦝'];
+const AVATAR_POOL = [
+  'moon', 'crown', 'swords', 'shield', 'feather', 'compass', 'key', 'gem',
+  'scroll', 'anchor', 'sparkles', 'bell', 'book', 'trees', 'hourglass', 'landmark',
+];
 const NIGHT_STEP_ORDER = ['werewolf', 'seer', 'doctor', 'witch'];
 
 function generateRoomCode(existingRooms) {
@@ -175,7 +178,7 @@ export class GameEngine {
     const profile =
       BOT_PROFILES.find((b) => !usedNames.has(b.name)) || {
         name: `บอท#${room.players.length + 1}`,
-        avatar: '🤖',
+        avatar: AVATAR_POOL[room.players.length % AVATAR_POOL.length],
       };
 
     room.players.push({
