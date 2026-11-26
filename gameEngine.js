@@ -117,18 +117,38 @@ export class GameEngine {
     return { ok: true, roomCode: code, playerId };
   }
 
-  joinRoom(socket, { roomCode, playerName, avatar }) {
+  joinRoom(socket, { roomCode, playerName, avatar, savedPlayerId }) {
     const code = (roomCode || '').trim().toUpperCase();
     const room = this.rooms.get(code);
     if (!room) return { ok: false, error: 'ไม่พบห้องรหัสนี้ กรุณาตรวจสอบรหัสห้องอีกครั้ง' };
+
+    const cleanName = (playerName || 'ผู้เล่น').trim().slice(0, 18) || 'ผู้เล่น';
+
+    // Seamless rejoin if player already has a seat in this room (by savedPlayerId or disconnected matching name)
+    if (savedPlayerId) {
+      const existingById = room.players.find((p) => p.id === savedPlayerId && !p.isBot);
+      if (existingById) {
+        return this.rejoinRoom(socket, { roomCode: code, playerId: existingById.id });
+      }
+    }
+
+    const disconnectedByName = room.players.find(
+      (p) => !p.isBot && !p.connected && p.name.toLowerCase() === cleanName.toLowerCase()
+    );
+    if (disconnectedByName) {
+      return this.rejoinRoom(socket, { roomCode: code, playerId: disconnectedByName.id });
+    }
+
     if (room.phase !== 'lobby') {
-      return { ok: false, error: 'เกมในห้องนี้เริ่มไปแล้ว ไม่สามารถเข้าร่วมกลางคันได้' };
+      return {
+        ok: false,
+        error: 'เกมในห้องนี้เริ่มไปแล้ว หากคุณหลุดออกจากเกมให้กรอกชื่อเดิมและรหัสห้องเดิมเพื่อกลับเข้าห้อง',
+      };
     }
     if (room.players.length >= 16) {
       return { ok: false, error: 'ห้องเต็มแล้ว (สูงสุด 16 คน)' };
     }
 
-    const cleanName = (playerName || 'ผู้เล่น').trim().slice(0, 18) || 'ผู้เล่น';
     const duplicate = room.players.some((p) => p.name.toLowerCase() === cleanName.toLowerCase());
     const finalName = duplicate ? `${cleanName}#${Math.floor(Math.random() * 90 + 10)}` : cleanName;
 
@@ -167,12 +187,20 @@ export class GameEngine {
     const player = room.players.find((p) => p.id === playerId && !p.isBot);
     if (!player) return { ok: false, error: 'ไม่พบข้อมูลผู้เล่นในห้องนี้' };
 
+    if (player.socketId && player.socketId !== socket.id) {
+      this.socketToPlayer.delete(player.socketId);
+    }
+
+    const wasDisconnected = !player.connected;
     player.socketId = socket.id;
     player.connected = true;
-    this.socketToPlayer.set(socket.id, { roomCode: code, playerId });
+    this.socketToPlayer.set(socket.id, { roomCode: code, playerId: player.id });
     socket.join(code);
+    if (wasDisconnected) {
+      this._addLog(room, `${player.name} กลับเข้าสู่ห้องแล้ว`);
+    }
     this.broadcastRoomState(room);
-    return { ok: true, roomCode: code, playerId };
+    return { ok: true, roomCode: code, playerId: player.id, rejoined: true };
   }
 
   toggleReady(roomCode, playerId) {
