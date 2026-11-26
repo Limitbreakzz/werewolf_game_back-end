@@ -31,6 +31,36 @@ app.get('/health', (_, res) => {
   res.json({ ok: true, service: 'werewolf-online-backend' });
 });
 
+// Cached Thai TTS audio endpoint for browsers without a local th-TH system voice (e.g. Windows Chrome)
+const ttsCache = new Map();
+app.get('/api/tts', async (req, res) => {
+  try {
+    const text = String(req.query.text || '').trim().slice(0, 180);
+    if (!text) return res.status(400).end();
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+
+    if (ttsCache.has(text)) {
+      return res.send(ttsCache.get(text));
+    }
+
+    const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=tw-ob&tl=th&q=${encodeURIComponent(text)}`;
+    const upstream = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (!upstream.ok) return res.status(502).end();
+
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (ttsCache.size > 40) ttsCache.clear();
+    ttsCache.set(text, buf);
+    return res.send(buf);
+  } catch {
+    return res.status(500).end();
+  }
+});
+
 const engine = new GameEngine(io);
 
 function reply(cb, res) {
