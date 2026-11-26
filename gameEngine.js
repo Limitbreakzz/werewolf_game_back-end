@@ -1962,7 +1962,7 @@ export class GameEngine {
   getPlayerView(room, viewerId) {
     const viewer = room.players.find((p) => p.id === viewerId);
     const isGameOver = room.phase === 'game_over';
-    const isViewerMod = Boolean(viewer?.isModerator);
+    const isViewerMod = Boolean(viewer?.isModerator) && room.settings.controlMode === 'manual_mod';
     const isViewerPackWolf = viewer && isPackWolf(viewer.role);
     const isViewerMinion = viewer && viewer.role === 'minion';
     const isViewerDead = viewer && !viewer.alive && !isViewerMod;
