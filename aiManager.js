@@ -1,4 +1,5 @@
 import { CHAT_LINES, pickRandom, formatLine } from './botNames.js';
+import { isPackWolf } from './roles.js';
 
 function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -26,8 +27,8 @@ export function scheduleBotNightActions(room, engine) {
   const step = room.nightStep;
 
   if (step === 'werewolf') {
-    const wolfBots = aliveBots.filter((p) => p.role === 'werewolf');
-    const nonWolves = alivePlayers.filter((p) => p.role !== 'werewolf');
+    const wolfBots = aliveBots.filter((p) => isPackWolf(p.role));
+    const nonWolves = alivePlayers.filter((p) => !isPackWolf(p.role));
     if (wolfBots.length > 0 && nonWolves.length > 0) {
       let preferred = nonWolves.find((p) => p.id === room.aiMemory.claimedSeerId);
       if (!preferred) preferred = pickRandom(nonWolves);
@@ -48,6 +49,18 @@ export function scheduleBotNightActions(room, engine) {
           engine.handleNightAction(room.code, bot.id, { type: 'wolf_vote', targetId });
         }, randInt(1400, 3200) + idx * 600);
       });
+    }
+  } else if (step === 'sorcerer') {
+    const sorcBots = aliveBots.filter((p) => p.role === 'sorcerer');
+    for (const bot of sorcBots) {
+      addBotTimer(room, () => {
+        if (room.phase !== 'night' || room.nightStep !== 'sorcerer' || !bot.alive) return;
+        const known = room.sorcererResults?.[bot.id] || {};
+        const candidates = alivePlayers.filter((p) => p.id !== bot.id && known[p.id] === undefined);
+        const pool = candidates.length > 0 ? candidates : alivePlayers.filter((p) => p.id !== bot.id);
+        if (pool.length === 0) return;
+        engine.handleNightAction(room.code, bot.id, { type: 'sorcerer_inspect', targetId: pickRandom(pool).id });
+      }, randInt(1400, 2800));
     }
   } else if (step === 'seer') {
     const seerBots = aliveBots.filter((p) => p.role === 'seer');
@@ -192,8 +205,8 @@ export function scheduleBotVotes(room, engine) {
       if (others.length === 0) return;
 
       let targetId = 'skip';
-      if (bot.role === 'werewolf') {
-        const nonWolves = others.filter((p) => p.role !== 'werewolf');
+      if (isPackWolf(bot.role) || bot.role === 'minion' || bot.role === 'sorcerer') {
+        const nonWolves = others.filter((p) => !isPackWolf(p.role));
         if (nonWolves.length > 0) {
           const seerClaim = nonWolves.find((p) => p.id === room.aiMemory.claimedSeerId);
           targetId = seerClaim ? seerClaim.id : pickRandom(nonWolves).id;

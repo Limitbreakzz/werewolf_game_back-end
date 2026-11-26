@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { ROLES, getDefaultRoleConfig, buildRoleDeck } from './roles.js';
+import { ROLES, isPackWolf, getDefaultRoleConfig, buildRoleDeck } from './roles.js';
 import { BOT_PROFILES } from './botNames.js';
 import {
   clearBotTimers,
@@ -13,7 +13,7 @@ const AVATAR_POOL = [
   'moon', 'crown', 'swords', 'shield', 'feather', 'compass', 'key', 'gem',
   'scroll', 'anchor', 'sparkles', 'bell', 'book', 'trees', 'hourglass', 'landmark',
 ];
-const NIGHT_STEP_ORDER = ['werewolf', 'seer', 'doctor', 'witch'];
+const NIGHT_STEP_ORDER = ['werewolf', 'sorcerer', 'seer', 'doctor', 'witch'];
 
 function sanitizeAvatar(raw, fallback = '') {
   if (typeof raw !== 'string') return fallback;
@@ -85,8 +85,10 @@ export class GameEngine {
       },
       night: this._emptyNightState(),
       seerResults: {},
+      sorcererResults: {},
       doctorLastProtected: {},
       witchState: {},
+      wolfDoubleKillNextNight: false,
       dayVotes: {},
       dayReadySet: new Set(),
       pendingHunterQueue: [],
@@ -94,6 +96,7 @@ export class GameEngine {
       lastDawnSummary: null,
       lastVoteSummary: null,
       winner: null,
+      winnerPlayerName: null,
       chat: { village: [], wolf: [], ghost: [] },
       logs: [],
       aiMemory: { claimedSeerId: null, exposedWolfIds: [] },
@@ -304,9 +307,12 @@ export class GameEngine {
     room.dayNumber = 0;
     room.nightStep = null;
     room.winner = null;
+    room.winnerPlayerName = null;
     room.seerResults = {};
+    room.sorcererResults = {};
     room.doctorLastProtected = {};
     room.witchState = {};
+    room.wolfDoubleKillNextNight = false;
     room.dayVotes = {};
     room.dayReadySet = new Set();
     room.pendingHunterQueue = [];
@@ -330,6 +336,7 @@ export class GameEngine {
         p.alive = true;
         p.deathCause = null;
         if (p.role === 'seer') room.seerResults[p.id] = {};
+        if (p.role === 'sorcerer') room.sorcererResults[p.id] = {};
         if (p.role === 'witch') room.witchState[p.id] = { hasHeal: true, hasPoison: true };
       }
     });
@@ -467,8 +474,8 @@ export class GameEngine {
       return { ok: false, error: 'คุณไม่มีสิทธิ์ทำคำสั่งในคืนนี้' };
     }
 
-    if (room.nightStep === 'werewolf' && action.type === 'wolf_vote' && player.role === 'werewolf') {
-      const target = room.players.find((p) => p.id === action.targetId && p.alive && p.role !== 'werewolf');
+    if (room.nightStep === 'werewolf' && action.type === 'wolf_vote' && isPackWolf(player.role)) {
+      const target = room.players.find((p) => p.id === action.targetId && p.alive && !p.isModerator && !isPackWolf(p.role));
       if (!target) return { ok: false, error: 'เป้าหมายไม่ถูกต้อง' };
       room.night.wolfVotes[player.id] = target.id;
       this._checkCurrentNightStepDone(room);
@@ -476,24 +483,49 @@ export class GameEngine {
       return { ok: true };
     }
 
+    if (room.nightStep === 'sorcerer' && action.type === 'sorcerer_inspect' && player.role === 'sorcerer') {
+      if (room.night.sorcererInspected[player.id]) {
+        return { ok: false, error: 'คืนนี้คุณตรวจสอบไปแล้ว' };
+      }
+      const target = room.players.find((p) => p.id === action.targetId && p.alive && !p.isModerator && p.id !== player.id);
+      if (!target) return { ok: false, error: 'เป้าหมายไม่ถูกต้อง' };
+      const isSeer = target.role === 'seer';
+      if (!room.sorcererResults[player.id]) room.sorcererResults[player.id] = {};
+      room.sorcererResults[player.id][target.id] = isSeer;
+      room.night.sorcererInspected[player.id] = { targetId: target.id, isSeer };
+      this.broadcastRoomState(room);
+      if (room.settings.controlMode !== 'manual_mod') {
+        const allDone = this._getAliveByRole(room, 'sorcerer').every((s) => Boolean(room.night.sorcererInspected[s.id]));
+        if (allDone && room.night.stepAdvancing !== 'sorcerer') {
+          room.night.stepAdvancing = 'sorcerer';
+          if (room.phaseTimer) clearTimeout(room.phaseTimer);
+          room.phaseTimer = setTimeout(() => {
+            if (room.phase === 'night' && room.nightStep === 'sorcerer') this._advanceNightStep(room);
+          }, 2600);
+        }
+      }
+      return { ok: true, sorcererResult: { targetId: target.id, targetName: target.name, isSeer } };
+    }
+
     if (room.nightStep === 'seer' && action.type === 'seer_inspect' && player.role === 'seer') {
       if (room.night.seerInspected[player.id]) {
         return { ok: false, error: 'คืนนี้คุณตรวจสอบไปแล้ว' };
       }
-      const target = room.players.find((p) => p.id === action.targetId && p.alive && p.id !== player.id);
+      const target = room.players.find((p) => p.id === action.targetId && p.alive && !p.isModerator && p.id !== player.id);
       if (!target) return { ok: false, error: 'เป้าหมายไม่ถูกต้อง' };
-      const resultTeam = ROLES[target.role].team;
+      // Official Ultimate Werewolf: Pack Wolves AND cursed Lycan appear as Werewolf; Minion/Sorcerer/Tanner appear as Village!
+      const resultTeam = isPackWolf(target.role) || target.role === 'lycan' ? 'werewolf' : 'village';
       room.seerResults[player.id][target.id] = resultTeam;
       room.night.seerInspected[player.id] = { targetId: target.id, team: resultTeam };
-      // Brief pause so Seer can read the result before advancing!
       this.broadcastRoomState(room);
       if (room.settings.controlMode !== 'manual_mod') {
         const allSeersDone = this._getAliveByRole(room, 'seer').every((s) => Boolean(room.night.seerInspected[s.id]));
-        if (allSeersDone) {
+        if (allSeersDone && room.night.stepAdvancing !== 'seer') {
+          room.night.stepAdvancing = 'seer';
           if (room.phaseTimer) clearTimeout(room.phaseTimer);
           room.phaseTimer = setTimeout(() => {
             if (room.phase === 'night' && room.nightStep === 'seer') this._advanceNightStep(room);
-          }, 3000);
+          }, 2800);
         }
       }
       return { ok: true, result: { targetId: target.id, targetName: target.name, team: resultTeam } };
@@ -601,7 +633,11 @@ export class GameEngine {
     room.pendingHunterQueue.shift();
     target.alive = false;
     target.deathCause = 'hunter';
-    this._addLog(room, `นักล่า ${hunter.name} ยิงปืนนัดสุดท้ายใส่ ${target.name}`);
+    this._addLog(room, `นายพราน ${hunter.name} ยิงปืนนัดสุดท้ายใส่ ${target.name}`);
+    if (target.role === 'wolf_cub') {
+      room.wolfDoubleKillNextNight = true;
+      this._addLog(room, 'ลูกมนุษย์หมาป่าเสียชีวิต! คืนถัดไปฝูงมนุษย์หมาป่าจะล่าได้ 2 คน');
+    }
 
     if (target.role === 'hunter') {
       room.pendingHunterQueue.push(target.id);
@@ -633,7 +669,7 @@ export class GameEngine {
     if (!text) return { ok: false };
 
     if (channel === 'wolf') {
-      if (player.role !== 'werewolf' || !player.alive) return { ok: false };
+      if (!isPackWolf(player.role) || !player.alive) return { ok: false };
     } else if (channel === 'ghost') {
       if (player.alive && !player.isModerator && room.phase !== 'game_over') return { ok: false };
     } else {
@@ -660,7 +696,7 @@ export class GameEngine {
       if (p.isBot || !p.socketId) continue;
       const canSee =
         channel === 'village' ||
-        (channel === 'wolf' && (p.role === 'werewolf' || !p.alive || p.isModerator || room.phase === 'game_over')) ||
+        (channel === 'wolf' && (isPackWolf(p.role) || !p.alive || p.isModerator || room.phase === 'game_over')) ||
         (channel === 'ghost' && (!p.alive || p.isModerator || room.phase === 'game_over'));
       if (canSee) {
         this.io.to(p.socketId).emit('chat_message', { channel, message: msg });
@@ -675,6 +711,9 @@ export class GameEngine {
     return {
       wolfVotes: {},
       wolfTargetId: null,
+      wolfTargetIds: [],
+      doubleKill: false,
+      sorcererInspected: {},
       seerInspected: {},
       doctorChoices: {},
       protectedIds: [],
@@ -686,17 +725,29 @@ export class GameEngine {
   }
 
   _getAliveByRole(room, roleId) {
+    if (roleId === 'werewolf') {
+      return room.players.filter((p) => p.alive && !p.isModerator && isPackWolf(p.role));
+    }
     return room.players.filter((p) => p.alive && !p.isModerator && p.role === roleId);
   }
 
   _roleExistsInGame(room, roleId) {
+    if (roleId === 'werewolf') {
+      return room.players.some((p) => !p.isModerator && isPackWolf(p.role));
+    }
     return room.players.some((p) => !p.isModerator && p.role === roleId);
   }
 
   _startNight(room) {
     room.dayNumber += 1;
     room.night = this._emptyNightState();
-    this._addLog(room, `คืนที่ ${room.dayNumber} เริ่มต้นขึ้น ทุกคนหลับตา`);
+    if (room.wolfDoubleKillNextNight) {
+      room.night.doubleKill = true;
+      room.wolfDoubleKillNextNight = false;
+      this._addLog(room, `คืนที่ ${room.dayNumber} เริ่มต้นขึ้น — ฝูงมนุษย์หมาป่าโกรธแค้น คืนนี้ล่าได้ 2 คน!`);
+    } else {
+      this._addLog(room, `คืนที่ ${room.dayNumber} เริ่มต้นขึ้น ทุกคนหลับตา`);
+    }
     this._beginNightStep(room, 0);
   }
 
@@ -778,9 +829,26 @@ export class GameEngine {
       if (entries.length > 0) {
         const maxVotes = entries[0][1];
         const top = entries.filter((e) => e[1] === maxVotes);
-        room.night.wolfTargetId = top[Math.floor(Math.random() * top.length)][0];
+        const firstId = top[Math.floor(Math.random() * top.length)][0];
+        room.night.wolfTargetId = firstId;
+        room.night.wolfTargetIds = [firstId];
+
+        if (room.night.doubleKill) {
+          const secondEntry = entries.find((e) => e[0] !== firstId);
+          if (secondEntry) {
+            room.night.wolfTargetIds.push(secondEntry[0]);
+          } else {
+            const extraPool = room.players.filter(
+              (p) => p.alive && !p.isModerator && !isPackWolf(p.role) && p.id !== firstId
+            );
+            if (extraPool.length > 0) {
+              room.night.wolfTargetIds.push(extraPool[Math.floor(Math.random() * extraPool.length)].id);
+            }
+          }
+        }
       } else {
         room.night.wolfTargetId = null;
+        room.night.wolfTargetIds = [];
       }
     } else if (currentStep === 'doctor') {
       room.night.protectedIds = Object.values(room.night.doctorChoices);
@@ -875,10 +943,13 @@ export class GameEngine {
 
   _resolveNight(room) {
     const deaths = [];
-    const { wolfTargetId, protectedIds, witchHealed, witchPoisonIds } = room.night;
+    const { wolfTargetId, wolfTargetIds, protectedIds, witchHealed, witchPoisonIds } = room.night;
+    const targets = wolfTargetIds?.length ? wolfTargetIds : wolfTargetId ? [wolfTargetId] : [];
 
-    if (wolfTargetId && !protectedIds.includes(wolfTargetId) && !witchHealed) {
-      const victim = room.players.find((p) => p.id === wolfTargetId && p.alive && !p.isModerator);
+    for (const tid of targets) {
+      if (protectedIds.includes(tid)) continue;
+      if (witchHealed && tid === wolfTargetId) continue;
+      const victim = room.players.find((p) => p.id === tid && p.alive && !p.isModerator);
       if (victim) {
         victim.alive = false;
         victim.deathCause = 'werewolf';
@@ -892,6 +963,10 @@ export class GameEngine {
         victim.alive = false;
         victim.deathCause = 'poison';
         deaths.push({ playerId: victim.id, name: victim.name, avatar: victim.avatar, cause: 'poison' });
+        if (victim.role === 'wolf_cub') {
+          room.wolfDoubleKillNextNight = true;
+          this._addLog(room, 'ลูกมนุษย์หมาป่าเสียชีวิต! คืนถัดไปฝูงมนุษย์หมาป่าจะล่าได้ 2 คน');
+        }
       }
     }
 
@@ -918,9 +993,11 @@ export class GameEngine {
     const tally = {};
     let skipVotes = 0;
 
-    for (const targetId of Object.values(room.dayVotes)) {
-      if (targetId === 'skip') skipVotes++;
-      else tally[targetId] = (tally[targetId] || 0) + 1;
+    for (const [voterId, targetId] of Object.entries(room.dayVotes)) {
+      const voter = room.players.find((p) => p.id === voterId);
+      const weight = voter && voter.role === 'mayor' ? 2 : 1;
+      if (targetId === 'skip') skipVotes += weight;
+      else tally[targetId] = (tally[targetId] || 0) + weight;
     }
 
     const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
@@ -961,6 +1038,21 @@ export class GameEngine {
       this._addLog(room, `หมู่บ้านงดออกเสียง วันนี้ไม่มีใครถูกโหวตออก`);
     }
 
+    // Official Ultimate Werewolf: Tanner wins alone immediately if eliminated by Day Vote!
+    if (eliminated && eliminated.role === 'tanner') {
+      room.winner = 'tanner';
+      room.winnerPlayerName = eliminated.name;
+      this._addLog(room, `คนคลั่ง ${eliminated.name} ถูกโหวตออกและชนะเกมคนเดียวทันที!`);
+      this._enterPhase(room, 'game_over', null);
+      return;
+    }
+
+    // Official Ultimate Werewolf: Wolf Cub death triggers Double Kill next night!
+    if (eliminated && eliminated.role === 'wolf_cub') {
+      room.wolfDoubleKillNextNight = true;
+      this._addLog(room, 'ลูกมนุษย์หมาป่าเสียชีวิต! คืนถัดไปฝูงมนุษย์หมาป่าจะล่าได้ 2 คน');
+    }
+
     if (eliminated && eliminated.role === 'hunter') {
       room.pendingHunterQueue = [eliminated.id];
       room.hunterNextPhase = 'night';
@@ -976,19 +1068,19 @@ export class GameEngine {
 
   _checkWinCondition(room) {
     const alive = room.players.filter((p) => p.alive && !p.isModerator);
-    const aliveWolves = alive.filter((p) => p.role === 'werewolf');
-    const aliveVillage = alive.filter((p) => p.role !== 'werewolf');
+    const aliveWolves = alive.filter((p) => isPackWolf(p.role));
+    const aliveNonWolves = alive.filter((p) => !isPackWolf(p.role));
 
     if (aliveWolves.length === 0) {
       room.winner = 'village';
-      this._addLog(room, 'ฝ่ายชาวบ้านเป็นฝ่ายชนะ! หมาป่าทั้งหมดถูกกำจัดแล้ว');
+      this._addLog(room, 'ฝ่ายชาวบ้านเป็นฝ่ายชนะ! มนุษย์หมาป่าทั้งหมดถูกกำจัดแล้ว');
       this._enterPhase(room, 'game_over', null);
       return true;
     }
 
-    if (aliveWolves.length >= aliveVillage.length) {
+    if (aliveWolves.length >= aliveNonWolves.length) {
       room.winner = 'werewolf';
-      this._addLog(room, 'ฝ่ายหมาป่าเป็นฝ่ายชนะ! หมู่บ้านตกอยู่ใต้อำนาจของหมาป่าแล้ว');
+      this._addLog(room, 'ฝ่ายมนุษย์หมาป่าเป็นฝ่ายชนะ! หมู่บ้านตกอยู่ใต้อำนาจของฝูงหมาป่าแล้ว');
       this._enterPhase(room, 'game_over', null);
       return true;
     }
@@ -1040,17 +1132,17 @@ export class GameEngine {
     const viewer = room.players.find((p) => p.id === viewerId);
     const isGameOver = room.phase === 'game_over';
     const isViewerMod = Boolean(viewer?.isModerator);
-    const isViewerWolf = viewer && viewer.role === 'werewolf';
+    const isViewerPackWolf = viewer && isPackWolf(viewer.role);
+    const isViewerMinion = viewer && viewer.role === 'minion';
     const isViewerDead = viewer && !viewer.alive && !isViewerMod;
     const isHostNarrator = room.settings.controlMode === 'narrator' && viewerId === room.hostId;
 
-    // Crucial privacy check: ONLY tell the player it is their turn if they are the active night role!
     const isMyNightTurn =
       room.phase === 'night' &&
       viewer &&
       viewer.alive &&
       !isViewerMod &&
-      viewer.role === room.nightStep &&
+      ((room.nightStep === 'werewolf' && isPackWolf(viewer.role)) || viewer.role === room.nightStep) &&
       (viewer.role !== 'witch' ||
         Boolean(
           room.witchState[viewer.id]?.hasHeal ||
@@ -1063,7 +1155,7 @@ export class GameEngine {
         isGameOver ||
         isViewerMod ||
         p.id === viewerId ||
-        (isViewerWolf && p.role === 'werewolf') ||
+        ((isViewerPackWolf || isViewerMinion) && isPackWolf(p.role)) ||
         (isViewerDead && room.phase !== 'lobby');
 
       return {
@@ -1089,6 +1181,7 @@ export class GameEngine {
       const doneIds = actors
         .filter((a) => {
           if (room.nightStep === 'werewolf') return Boolean(room.night.wolfVotes[a.id]);
+          if (room.nightStep === 'sorcerer') return Boolean(room.night.sorcererInspected[a.id]);
           if (room.nightStep === 'seer') return Boolean(room.night.seerInspected[a.id]);
           if (room.nightStep === 'doctor') return Boolean(room.night.doctorChoices[a.id]);
           if (room.nightStep === 'witch') return Boolean(room.night.witchDone[a.id]);
@@ -1106,17 +1199,20 @@ export class GameEngine {
       myRole: viewer ? viewer.role : null,
       isModerator: isViewerMod,
       isMyNightTurn,
-      // Only expose which nightStep is running to: active player, Moderator, or Host in Voice Narrator mode!
+      doubleKillTonight: isViewerPackWolf || isViewerMod ? Boolean(room.night.doubleKill) : false,
       visibleNightStep: isMyNightTurn || isViewerMod || isHostNarrator ? room.nightStep : null,
       modNightStatus,
       seerResults: viewer && viewer.role === 'seer' ? room.seerResults[viewer.id] || {} : {},
       seerInspectedTonight:
         viewer && viewer.role === 'seer' ? room.night.seerInspected[viewer.id] || null : null,
+      sorcererResults: viewer && viewer.role === 'sorcerer' ? room.sorcererResults[viewer.id] || {} : {},
+      sorcererInspectedTonight:
+        viewer && viewer.role === 'sorcerer' ? room.night.sorcererInspected[viewer.id] || null : null,
       doctorLastProtected:
         viewer && viewer.role === 'doctor' ? room.doctorLastProtected[viewer.id] || null : null,
       doctorChoiceTonight:
         viewer && viewer.role === 'doctor' ? room.night.doctorChoices[viewer.id] || null : null,
-      wolfVotes: isViewerWolf || isViewerMod || isViewerDead || isGameOver ? room.night.wolfVotes : {},
+      wolfVotes: isViewerPackWolf || isViewerMod || isViewerDead || isGameOver ? room.night.wolfVotes : {},
       witchState: viewer && viewer.role === 'witch' ? room.witchState[viewer.id] || null : null,
       witchDoneTonight:
         viewer && viewer.role === 'witch' ? Boolean(room.night.witchDone[viewer.id]) : false,
@@ -1132,7 +1228,7 @@ export class GameEngine {
 
     const chat = {
       village: room.chat.village,
-      wolf: isViewerWolf || isViewerMod || isViewerDead || isGameOver ? room.chat.wolf : [],
+      wolf: isViewerPackWolf || isViewerMod || isViewerDead || isGameOver ? room.chat.wolf : [],
       ghost: isViewerDead || isViewerMod || isGameOver ? room.chat.ghost : [],
     };
 
@@ -1152,6 +1248,7 @@ export class GameEngine {
       lastDawnSummary: room.lastDawnSummary,
       lastVoteSummary: room.lastVoteSummary,
       winner: room.winner,
+      winnerPlayerName: room.winnerPlayerName,
       privateData,
       chat,
       logs: room.logs,
