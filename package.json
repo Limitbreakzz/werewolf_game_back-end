@@ -1,0 +1,15 @@
+{
+  "name": "werewolf-online-backend",
+  "version": "2.0.0",
+  "description": "Werewolf Online real-time Socket.IO game server (Render-ready)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
