@@ -478,6 +478,17 @@ export class GameEngine {
       const target = room.players.find((p) => p.id === action.targetId && p.alive && !p.isModerator && !isPackWolf(p.role));
       if (!target) return { ok: false, error: 'เป้าหมายไม่ถูกต้อง' };
       room.night.wolfVotes[player.id] = target.id;
+
+      // If a human wolf picks a target, alive bot wolf teammates align with the human wolf so solo/mixed play stays smooth
+      if (!player.isBot && !room.night.doubleKill) {
+        const botWolves = this._getAliveByRole(room, 'werewolf').filter((w) => w.isBot);
+        for (const bw of botWolves) {
+          if (room.night.wolfVotes[bw.id] && room.night.wolfVotes[bw.id] !== target.id) {
+            room.night.wolfVotes[bw.id] = target.id;
+          }
+        }
+      }
+
       this._checkCurrentNightStepDone(room);
       this.broadcastRoomState(room);
       return { ok: true };
@@ -794,7 +805,12 @@ export class GameEngine {
 
     let done = false;
     if (step === 'werewolf') {
-      done = aliveActors.every((w) => Boolean(room.night.wolfVotes[w.id]));
+      const allVoted = aliveActors.length > 0 && aliveActors.every((w) => Boolean(room.night.wolfVotes[w.id]));
+      if (allVoted) {
+        const uniqueTargets = new Set(aliveActors.map((w) => room.night.wolfVotes[w.id]));
+        // Normal night: wolves MUST agree on the exact same victim to auto-advance!
+        done = room.night.doubleKill ? true : uniqueTargets.size === 1;
+      }
     } else if (step === 'doctor') {
       done = aliveActors.every((d) => Boolean(room.night.doctorChoices[d.id]));
     } else if (step === 'witch') {
@@ -821,32 +837,26 @@ export class GameEngine {
     const currentStep = room.nightStep;
     // Commit results of current step before moving to next
     if (currentStep === 'werewolf') {
-      const tally = {};
-      for (const targetId of Object.values(room.night.wolfVotes)) {
-        tally[targetId] = (tally[targetId] || 0) + 1;
-      }
-      const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
-      if (entries.length > 0) {
-        const maxVotes = entries[0][1];
-        const top = entries.filter((e) => e[1] === maxVotes);
-        const firstId = top[Math.floor(Math.random() * top.length)][0];
-        room.night.wolfTargetId = firstId;
-        room.night.wolfTargetIds = [firstId];
+      const aliveWolves = this._getAliveByRole(room, 'werewolf');
+      const votedEntries = aliveWolves
+        .map((w) => room.night.wolfVotes[w.id])
+        .filter(Boolean);
+      const uniqueTargets = [...new Set(votedEntries)];
 
-        if (room.night.doubleKill) {
-          const secondEntry = entries.find((e) => e[0] !== firstId);
-          if (secondEntry) {
-            room.night.wolfTargetIds.push(secondEntry[0]);
-          } else {
-            const extraPool = room.players.filter(
-              (p) => p.alive && !p.isModerator && !isPackWolf(p.role) && p.id !== firstId
-            );
-            if (extraPool.length > 0) {
-              room.night.wolfTargetIds.push(extraPool[Math.floor(Math.random() * extraPool.length)].id);
-            }
-          }
-        }
+      if (room.night.doubleKill) {
+        // Double Kill night (Wolf Cub revenge): up to 2 victims
+        room.night.wolfTargetIds = uniqueTargets.slice(0, 2);
+        room.night.wolfTargetId = room.night.wolfTargetIds[0] || null;
+      } else if (
+        aliveWolves.length > 0 &&
+        votedEntries.length === aliveWolves.length &&
+        uniqueTargets.length === 1
+      ) {
+        // Strict unanimous rule: ALL alive pack wolves must vote for the exact same player!
+        room.night.wolfTargetId = uniqueTargets[0];
+        room.night.wolfTargetIds = [uniqueTargets[0]];
       } else {
+        // Wolves disagreed or failed to vote unanimously -> no one dies tonight
         room.night.wolfTargetId = null;
         room.night.wolfTargetIds = [];
       }

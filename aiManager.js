@@ -37,7 +37,7 @@ export function scheduleBotNightActions(room, engine) {
         addBotTimer(room, () => {
           if (room.phase !== 'night' || room.nightStep !== 'werewolf' || !bot.alive) return;
           const existingVotes = Object.values(room.night.wolfVotes);
-          const targetId = existingVotes.length > 0 && Math.random() < 0.85 ? existingVotes[0] : preferred.id;
+          const targetId = existingVotes.length > 0 ? existingVotes[0] : preferred.id;
 
           if (idx === 0 && Math.random() < 0.6) {
             const tPlayer = room.players.find((p) => p.id === targetId);
