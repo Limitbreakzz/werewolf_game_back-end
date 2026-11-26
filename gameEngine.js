@@ -681,6 +681,7 @@ export class GameEngine {
       witchHealed: false,
       witchPoisonIds: [],
       witchDone: {},
+      stepAdvancing: null,
     };
   }
 
@@ -753,9 +754,10 @@ export class GameEngine {
       done = activeWitches.every((w) => Boolean(room.night.witchDone[w.id]));
     }
 
-    if (done) {
+    if (done && room.night.stepAdvancing !== step) {
+      room.night.stepAdvancing = step;
       if (room.phaseTimer) clearTimeout(room.phaseTimer);
-      // Small 1.2s buffer for natural pacing
+      // Small 1.2s buffer for natural pacing (never reset on repeated clicks)
       room.phaseTimer = setTimeout(() => {
         if (room.phase === 'night' && room.nightStep === step) {
           this._advanceNightStep(room);

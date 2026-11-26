@@ -33,105 +33,122 @@ app.get('/health', (_, res) => {
 
 const engine = new GameEngine(io);
 
+function reply(cb, res) {
+  if (typeof cb === 'function') cb(res);
+}
+
 io.on('connection', (socket) => {
   const getCtx = () => engine.socketToPlayer.get(socket.id);
 
   socket.on('create_room', (payload, cb) => {
     const res = engine.createRoom(socket, payload || {});
-    if (cb) cb(res);
+    reply(cb, res);
   });
 
   socket.on('join_room', (payload, cb) => {
     const res = engine.joinRoom(socket, payload || {});
-    if (cb) cb(res);
+    reply(cb, res);
   });
 
   socket.on('rejoin_room', (payload, cb) => {
     const res = engine.rejoinRoom(socket, payload || {});
-    if (cb) cb(res);
+    reply(cb, res);
   });
 
   socket.on('add_bot', (_, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.addBot(ctx.roomCode, ctx.playerId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.addBot(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
   });
 
   socket.on('remove_bot', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.removeBot(ctx.roomCode, ctx.playerId, payload?.botId || null));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.removeBot(ctx.roomCode, ctx.playerId, payload?.botId || null);
+    reply(cb, res);
   });
 
   socket.on('kick_player', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.kickPlayer(ctx.roomCode, ctx.playerId, payload?.targetId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.kickPlayer(ctx.roomCode, ctx.playerId, payload?.targetId);
+    reply(cb, res);
   });
 
   socket.on('update_settings', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.updateSettings(ctx.roomCode, ctx.playerId, payload || {}));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.updateSettings(ctx.roomCode, ctx.playerId, payload || {});
+    reply(cb, res);
   });
 
   socket.on('toggle_ready', (_, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.toggleReady(ctx.roomCode, ctx.playerId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.toggleReady(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
   });
 
   socket.on('mod_control', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleModControl(ctx.roomCode, ctx.playerId, payload || {}));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleModControl(ctx.roomCode, ctx.playerId, payload || {});
+    reply(cb, res);
   });
 
   socket.on('start_game', (_, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.startGame(ctx.roomCode, ctx.playerId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.startGame(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
   });
 
   socket.on('night_action', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleNightAction(ctx.roomCode, ctx.playerId, payload || {}));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleNightAction(ctx.roomCode, ctx.playerId, payload || {});
+    reply(cb, res);
   });
 
   socket.on('day_ready', (_, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleDayReady(ctx.roomCode, ctx.playerId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleDayReady(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
   });
 
   socket.on('day_vote', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleDayVote(ctx.roomCode, ctx.playerId, payload?.targetId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleDayVote(ctx.roomCode, ctx.playerId, payload?.targetId);
+    reply(cb, res);
   });
 
   socket.on('hunter_shoot', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleHunterShoot(ctx.roomCode, ctx.playerId, payload?.targetId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleHunterShoot(ctx.roomCode, ctx.playerId, payload?.targetId);
+    reply(cb, res);
   });
 
   socket.on('send_chat', (payload, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.handleChat(ctx.roomCode, ctx.playerId, payload?.channel || 'village', payload?.text));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.handleChat(ctx.roomCode, ctx.playerId, payload?.channel || 'village', payload?.text);
+    reply(cb, res);
   });
 
   socket.on('play_again', (_, cb) => {
     const ctx = getCtx();
-    if (!ctx) return cb?.({ ok: false });
-    cb?.(engine.playAgain(ctx.roomCode, ctx.playerId));
+    if (!ctx) return reply(cb, { ok: false });
+    const res = engine.playAgain(ctx.roomCode, ctx.playerId);
+    reply(cb, res);
   });
 
   socket.on('leave_room', (_, cb) => {
     engine.leaveRoom(socket);
-    cb?.({ ok: true });
+    reply(cb, { ok: true });
   });
 
   socket.on('disconnect', () => {
