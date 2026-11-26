@@ -176,8 +176,13 @@ io.on('connection', (socket) => {
     reply(cb, res);
   });
 
+  socket.on('sync_room', (_, cb) => {
+    const res = engine.syncPlayer(socket);
+    reply(cb, res);
+  });
+
   socket.on('leave_room', (_, cb) => {
-    engine.leaveRoom(socket);
+    engine.leaveRoom(socket, { immediate: true });
     reply(cb, { ok: true });
   });
 

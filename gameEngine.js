@@ -66,6 +66,7 @@ export class GameEngine {
 
     const room = {
       code,
+      stateVersion: 0,
       hostId: playerId,
       phase: 'lobby', // lobby | role_reveal | night | dawn | day_discuss | day_vote | hunter_revenge | game_over
       nightStep: null, // 'werewolf' | 'seer' | 'doctor' | 'witch' | null
@@ -422,7 +423,7 @@ export class GameEngine {
     return { ok: true };
   }
 
-  leaveRoom(socket) {
+  leaveRoom(socket, { immediate = true } = {}) {
     const mapping = this.socketToPlayer.get(socket.id);
     if (!mapping) return;
     const { roomCode, playerId } = mapping;
@@ -436,7 +437,7 @@ export class GameEngine {
     if (idx === -1) return;
     const player = room.players[idx];
 
-    if (room.phase === 'lobby') {
+    if (room.phase === 'lobby' && immediate) {
       room.players.splice(idx, 1);
       this._addLog(room, `${player.name} ออกจากห้อง`);
       this._reassignHostIfNeeded(room);
@@ -446,6 +447,26 @@ export class GameEngine {
         return;
       }
       this.broadcastRoomState(room);
+    } else if (room.phase === 'lobby' && !immediate) {
+      // Grace period (20s) for mobile network blips / tab switches in Lobby before removing player
+      player.connected = false;
+      player.socketId = null;
+      this.broadcastRoomState(room);
+      setTimeout(() => {
+        const r = this.rooms.get(roomCode);
+        if (!r || r.phase !== 'lobby') return;
+        const pIdx = r.players.findIndex((pl) => pl.id === playerId);
+        if (pIdx === -1 || r.players[pIdx].connected) return;
+        r.players.splice(pIdx, 1);
+        this._addLog(r, `${player.name} หลุดการเชื่อมต่อออกจากห้อง`);
+        this._reassignHostIfNeeded(r);
+        this._syncSeatNumbersAndRoles(r);
+        if (!r.players.some((pl) => !pl.isBot)) {
+          this._destroyRoom(r);
+          return;
+        }
+        this.broadcastRoomState(r);
+      }, 20000);
     } else {
       player.connected = false;
       player.socketId = null;
@@ -463,7 +484,16 @@ export class GameEngine {
   }
 
   handleDisconnect(socket) {
-    this.leaveRoom(socket);
+    this.leaveRoom(socket, { immediate: false });
+  }
+
+  syncPlayer(socket) {
+    const mapping = this.socketToPlayer.get(socket.id);
+    if (!mapping) return { ok: false };
+    const room = this.rooms.get(mapping.roomCode);
+    if (!room) return { ok: false };
+    socket.emit('room_state', this.getPlayerView(room, mapping.playerId));
+    return { ok: true };
   }
 
   handleNightAction(roomCode, playerId, action) {
@@ -1244,6 +1274,7 @@ export class GameEngine {
 
     return {
       code: room.code,
+      stateVersion: room.stateVersion || 0,
       hostId: room.hostId,
       myId: viewerId,
       phase: room.phase,
@@ -1267,6 +1298,7 @@ export class GameEngine {
   }
 
   broadcastRoomState(room) {
+    room.stateVersion = (room.stateVersion || 0) + 1;
     for (const p of room.players) {
       if (p.isBot || !p.socketId) continue;
       this.io.to(p.socketId).emit('room_state', this.getPlayerView(room, p.id));
