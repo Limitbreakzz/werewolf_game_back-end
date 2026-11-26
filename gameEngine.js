@@ -15,6 +15,16 @@ const AVATAR_POOL = [
 ];
 const NIGHT_STEP_ORDER = ['werewolf', 'seer', 'doctor', 'witch'];
 
+function sanitizeAvatar(raw, fallback = '') {
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length <= 40000) {
+    return trimmed;
+  }
+  if (AVATAR_POOL.includes(trimmed)) return trimmed;
+  return fallback;
+}
+
 function generateRoomCode(existingRooms) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -43,7 +53,7 @@ export class GameEngine {
       socketId: socket.id,
       seatNumber: 1,
       name: cleanName,
-      avatar: avatar || AVATAR_POOL[0],
+      avatar: sanitizeAvatar(avatar, ''),
       isHost: true,
       isModerator: false,
       isBot: false,
@@ -118,7 +128,7 @@ export class GameEngine {
       socketId: socket.id,
       seatNumber: room.players.length + 1,
       name: finalName,
-      avatar: avatar || AVATAR_POOL[room.players.length % AVATAR_POOL.length],
+      avatar: sanitizeAvatar(avatar, ''),
       isHost: false,
       isModerator: false,
       isBot: false,
