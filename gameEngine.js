@@ -1061,7 +1061,8 @@ export class GameEngine {
       case 'hunter_revenge': {
         const hunterId = room.pendingHunterQueue.shift();
         const hunter = room.players.find((p) => p.id === hunterId);
-        if (hunter) this._addLog(room, `นักล่า ${hunter.name} หมดเวลายิงปืน`);
+        if (hunter) this._addLog(room, `นายพราน ${hunter.name} หมดเวลายิงปืน`);
+        if (this._checkWinCondition(room)) return;
         if (room.pendingHunterQueue.length > 0) {
           this._enterPhase(room, 'hunter_revenge', room.settings.hunterSeconds);
         } else {
@@ -1257,6 +1258,11 @@ export class GameEngine {
       this._addLog(room, 'ฝ่ายชาวบ้านเป็นฝ่ายชนะ! มนุษย์หมาป่าทั้งหมดถูกกำจัดแล้ว');
       this._enterPhase(room, 'game_over', null);
       return true;
+    }
+
+    // If a Hunter just died and hasn't taken their final revenge shot yet, let them shoot before checking Wolf victory!
+    if (room.pendingHunterQueue && room.pendingHunterQueue.length > 0) {
+      return false;
     }
 
     if (aliveWolves.length >= aliveNonWolves.length) {
